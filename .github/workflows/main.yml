@@ -1,0 +1,283 @@
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to release (e.g., v1.0.0)'
+        required: true
+        type: string
+      prerelease:
+        description: 'Mark as prerelease'
+        required: false
+        type: boolean
+        default: false
+  push:
+    tags:
+      - 'v*'
+
+env:
+  DOTNET_VERSION: '9.0.x'
+  DOTNET_SKIP_FIRST_TIME_EXPERIENCE: 1
+  DOTNET_NOLOGO: true
+  DOTNET_CLI_TELEMETRY_OPTOUT: 1
+  PROJECT_NAME: OpenCodeUpdater
+
+jobs:
+  build:
+    name: Build ${{ matrix.runtime }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false  # Continue building other targets if one fails
+      matrix:
+        include:
+          - os: windows-latest
+            runtime: win-x64
+            artifact-name: OpenCodeUpdater-win-x64
+            archive-type: zip
+          - os: ubuntu-latest
+            runtime: linux-x64
+            artifact-name: OpenCodeUpdater-linux-x64
+            archive-type: tar.gz
+          - os: macos-latest
+            runtime: osx-x64
+            artifact-name: OpenCodeUpdater-macos-x64
+            archive-type: tar.gz
+          - os: macos-latest
+            runtime: osx-arm64
+            artifact-name: OpenCodeUpdater-macos-arm64
+            archive-type: tar.gz
+              
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Setup .NET
+      uses: actions/setup-dotnet@v4
+      with:
+        dotnet-version: ${{ env.DOTNET_VERSION }}
+        
+    - name: Cache NuGet packages
+      uses: actions/cache@v4
+      with:
+        path: ~/.nuget/packages
+        key: ${{ runner.os }}-nuget-${{ hashFiles('**/*.csproj') }}
+        restore-keys: |
+          ${{ runner.os }}-nuget-
+        
+    - name: Restore dependencies
+      run: dotnet restore
+
+    - name: Setup ARM64 cross-compilation
+      if: matrix.cross-compile == true && matrix.runtime == 'linux-arm64'
+      run: |
+        # Microsoft's official .NET 9 AOT cross-compilation setup adapted for Ubuntu 24.04
+        sudo dpkg --add-architecture arm64
+        sudo bash -c 'cat > /etc/apt/sources.list.d/arm64.list <<EOF
+        deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports/ noble main restricted
+        deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports/ noble-updates main restricted
+        deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports/ noble-backports main restricted universe multiverse
+        EOF'
+        sudo sed -i -e 's/deb http/deb [arch=amd64] http/g' /etc/apt/sources.list
+        sudo sed -i -e 's/deb mirror/deb [arch=amd64] mirror/g' /etc/apt/sources.list
+        sudo apt update
+        sudo apt install -y clang llvm binutils-aarch64-linux-gnu gcc-aarch64-linux-gnu zlib1g-dev:arm64
+
+    - name: Build and publish AOT
+      shell: bash
+      run: |
+        # Set cross-compilation environment for Linux ARM64
+        if [ "${{ matrix.runtime }}" = "linux-arm64" ]; then
+          export CC=aarch64-linux-gnu-gcc
+          export CXX=aarch64-linux-gnu-g++
+          export AR=aarch64-linux-gnu-ar
+          export STRIP=aarch64-linux-gnu-strip
+          export OBJCOPY=aarch64-linux-gnu-objcopy
+        fi
+        
+        # Build with AOT
+        dotnet publish ${{ env.PROJECT_NAME }}.csproj \
+          --configuration Release \
+          --runtime ${{ matrix.runtime }} \
+          --self-contained \
+          --output ./publish/${{ matrix.runtime }} \
+          -p:PublishAot=true \
+          -p:PublishTrimmed=true \
+          -p:TrimMode=full \
+          -p:EnableCompressionInSingleFile=true \
+          -p:DebugType=none \
+          -p:DebugSymbols=false
+        
+        # Verify the executable exists
+        if [ "${{ matrix.os }}" = "windows-latest" ]; then
+          if [ ! -f "./publish/${{ matrix.runtime }}/${{ env.PROJECT_NAME }}.exe" ]; then
+            echo "Error: Executable not found!"
+            exit 1
+          fi
+        else
+          if [ ! -f "./publish/${{ matrix.runtime }}/${{ env.PROJECT_NAME }}" ]; then
+            echo "Error: Executable not found!"
+            exit 1
+          fi
+          # Make executable on Unix systems
+          chmod +x "./publish/${{ matrix.runtime }}/${{ env.PROJECT_NAME }}"
+        fi
+        
+        # Display size information
+        echo "Build artifacts:"
+        ls -la ./publish/${{ matrix.runtime }}/
+
+    - name: Create archive
+      shell: bash
+      run: |
+        cd ./publish/${{ matrix.runtime }}
+        if [ "${{ matrix.archive-type }}" = "zip" ]; then
+          7z a -tzip ../../${{ matrix.artifact-name }}.zip *
+        else
+          tar -czf ../../${{ matrix.artifact-name }}.tar.gz *
+        fi
+        cd ../..
+        
+        # Verify archive was created
+        if [ "${{ matrix.archive-type }}" = "zip" ]; then
+          if [ ! -f "${{ matrix.artifact-name }}.zip" ]; then
+            echo "Error: Archive not created!"
+            exit 1
+          fi
+          echo "Archive size: $(ls -lh ${{ matrix.artifact-name }}.zip | awk '{print $5}')"
+        else
+          if [ ! -f "${{ matrix.artifact-name }}.tar.gz" ]; then
+            echo "Error: Archive not created!"
+            exit 1
+          fi
+          echo "Archive size: $(ls -lh ${{ matrix.artifact-name }}.tar.gz | awk '{print $5}')"
+        fi
+        
+    - name: Upload artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{ matrix.artifact-name }}
+        path: ${{ matrix.artifact-name }}.${{ matrix.archive-type }}
+        retention-days: 1
+        if-no-files-found: error
+
+  release:
+    name: Create GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      actions: read
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+        
+    - name: Determine version
+      id: get_version
+      run: |
+        if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
+          VERSION="${{ github.event.inputs.version }}"
+          # Validate version format
+          if ! [[ "$VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9]+)?$ ]]; then
+            echo "Error: Invalid version format. Use v1.0.0 or v1.0.0-beta1"
+            exit 1
+          fi
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          
+          # Create and push tag if it doesn't exist
+          if ! git rev-parse "$VERSION" >/dev/null 2>&1; then
+            git config user.name "GitHub Actions"
+            git config user.email "actions@github.com"
+            git tag -a "$VERSION" -m "Release $VERSION"
+            git push origin "$VERSION"
+          fi
+        else
+          echo "version=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+        fi
+        
+    - name: Download all artifacts
+      uses: actions/download-artifact@v4
+      with:
+        path: ./artifacts
+        
+    - name: Verify all artifacts
+      run: |
+        echo "Downloaded artifacts:"
+        find ./artifacts -type f -name "*.zip" -o -name "*.tar.gz" | sort
+        
+        # Verify all expected artifacts are present
+        EXPECTED_COUNT=4
+        ACTUAL_COUNT=$(find ./artifacts -type f \( -name "*.zip" -o -name "*.tar.gz" \) | wc -l)
+        
+        if [ "$ACTUAL_COUNT" -ne "$EXPECTED_COUNT" ]; then
+          echo "Error: Expected $EXPECTED_COUNT artifacts but found $ACTUAL_COUNT"
+          exit 1
+        fi
+        
+    - name: Generate release notes
+      id: release_notes
+      run: |
+        VERSION="${{ steps.get_version.outputs.version }}"
+        
+        # Get previous tag
+        PREVIOUS_TAG=$(git describe --tags --abbrev=0 "$VERSION^" 2>/dev/null || echo "")
+        
+        {
+          if [ -n "$PREVIOUS_TAG" ]; then
+            echo "## What's Changed"
+            echo ""
+            # Group commits by type
+            echo "### Features"
+            git log --pretty=format:"- %s" "$PREVIOUS_TAG".."$VERSION" | grep -E "^- (feat|feature):" || echo "- No new features"
+            echo ""
+            echo "### Bug Fixes"
+            git log --pretty=format:"- %s" "$PREVIOUS_TAG".."$VERSION" | grep -E "^- (fix|bugfix):" || echo "- No bug fixes"
+            echo ""
+            echo "### Other Changes"
+            git log --pretty=format:"- %s" "$PREVIOUS_TAG".."$VERSION" | grep -vE "^- (feat|feature|fix|bugfix):" || echo "- No other changes"
+          else
+            echo "## Initial Release 🎉"
+            echo ""
+            echo "First release of ${{ env.PROJECT_NAME }}."
+          fi
+          
+          echo ""
+          echo "## Installation"
+          echo ""
+          echo "Download the appropriate archive for your platform and extract the executable."
+          echo ""
+          echo "### Downloads"
+          echo ""
+          echo "| Platform | Architecture | Download |"
+          echo "|----------|--------------|----------|"
+          echo "| Windows | x64 | [OpenCodeUpdater-win-x64.zip](../../releases/download/$VERSION/OpenCodeUpdater-win-x64.zip) |"
+          echo "| Linux | x64 | [OpenCodeUpdater-linux-x64.tar.gz](../../releases/download/$VERSION/OpenCodeUpdater-linux-x64.tar.gz) |"
+          echo "| macOS | x64 (Intel) | [OpenCodeUpdater-macos-x64.tar.gz](../../releases/download/$VERSION/OpenCodeUpdater-macos-x64.tar.gz) |"
+          echo "| macOS | ARM64 (Apple Silicon) | [OpenCodeUpdater-macos-arm64.tar.gz](../../releases/download/$VERSION/OpenCodeUpdater-macos-arm64.tar.gz) |"
+          echo ""
+          echo "### Checksums"
+          echo ""
+          echo '```'
+          find ./artifacts -type f \( -name "*.zip" -o -name "*.tar.gz" \) -exec sha256sum {} \; | sed 's|./artifacts/[^/]*/||'
+          echo '```'
+        } > release_notes.md
+
+    - name: Create release
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        PRERELEASE_FLAG=""
+        if [ "${{ github.event.inputs.prerelease }}" == "true" ] || [[ "${{ steps.get_version.outputs.version }}" =~ -[a-zA-Z0-9]+$ ]]; then
+          PRERELEASE_FLAG="--prerelease"
+        fi
+        
+        # Create release with all artifacts
+        gh release create "${{ steps.get_version.outputs.version }}" \
+          --title "${{ env.PROJECT_NAME }} ${{ steps.get_version.outputs.version }}" \
+          --notes-file release_notes.md \
+          $PRERELEASE_FLAG \
+          ./artifacts/*/*.zip \
+          ./artifacts/*/*.tar.gz

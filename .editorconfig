@@ -1,0 +1,5 @@
+[*.cs]
+
+# IDE0160: Convert to block scoped namespace
+dotnet_diagnostic.IDE0130.severity = none
+dotnet_diagnostic.CA1822.severity = none

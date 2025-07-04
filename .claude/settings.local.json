@@ -1,0 +1,19 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(dotnet build)",
+      "Bash(mkdir:*)",
+      "Bash(git add:*)",
+      "WebFetch(domain:spectreconsole.net)",
+      "Bash(dotnet build:*)",
+      "Bash(dotnet run)",
+      "Bash(dotnet run:*)",
+      "Bash(grep:*)",
+      "Bash(git commit:*)",
+      "WebFetch(domain:docs.github.com)",
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:learn.microsoft.com)"
+    ],
+    "deny": []
+  }
+}
