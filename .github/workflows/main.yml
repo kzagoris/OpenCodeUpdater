@@ -31,11 +31,11 @@ jobs:
         include:
           - os: windows-latest
             runtime: win-x64
-            artifact-name: upgrade-opencode-win-x64
+            artifact-name: OpenCodeUpdater-win-x64
             executable-extension: .exe
           - os: ubuntu-latest
             runtime: linux-x64
-            artifact-name: upgrade-opencode-linux-x64
+            artifact-name: OpenCodeUpdater-linux-x64
             executable-extension: ''
           
               
@@ -54,7 +54,7 @@ jobs:
       
     - name: Build and publish AOT
       run: |
-        dotnet publish --configuration Release --runtime ${{ matrix.runtime }} --self-contained --output ./publish/${{ matrix.runtime }} -p:PublishAot=true -p:PublishTrimmed=true -p:TrimMode=full
+        dotnet publish --configuration Release --runtime ${{ matrix.runtime }} --self-contained  -p:PublishAot=true -p:PublishTrimmed=true -p:TrimMode=full
 
     - name: Create archive (Windows)
       if: matrix.os == 'windows-latest'
@@ -123,17 +123,14 @@ jobs:
           git log --pretty=format:"- %s" ${PREVIOUS_TAG}..HEAD >> release_notes.md
         else
           echo "## Initial Release" > release_notes.md
-          echo "First release of upgrade-opencode." >> release_notes.md
+          echo "First release of OpenCodeUpdater." >> release_notes.md
         fi
         
         echo "" >> release_notes.md
         echo "## Downloads" >> release_notes.md
-        echo "- **Windows (x64)**: upgrade-opencode-win-x64.zip" >> release_notes.md
-        echo "- **Linux (x64)**: upgrade-opencode-linux-x64.tar.gz" >> release_notes.md
-        echo "- **Linux (ARM64)**: upgrade-opencode-linux-arm64.tar.gz" >> release_notes.md
-        echo "- **macOS (x64)**: upgrade-opencode-macos-x64.tar.gz" >> release_notes.md
-        echo "- **macOS (ARM64)**: upgrade-opencode-macos-arm64.tar.gz" >> release_notes.md
-        
+        echo "- **Windows (x64)**: OpenCodeUpdater-win-x64.zip" >> release_notes.md
+        echo "- **Linux (x64)**: OpenCodeUpdater-linux-x64.tar.gz" >> release_notes.md
+
     - name: Create release
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -147,8 +144,5 @@ jobs:
           --title "Release ${{ steps.get_version.outputs.version }}" \
           --notes-file release_notes.md \
           $PRERELEASE_FLAG \
-          ./artifacts/upgrade-opencode-win-x64/*.zip \
-          ./artifacts/upgrade-opencode-linux-x64/*.tar.gz \
-          ./artifacts/upgrade-opencode-linux-arm64/*.tar.gz \
-          ./artifacts/upgrade-opencode-macos-x64/*.tar.gz \
-          ./artifacts/upgrade-opencode-macos-arm64/*.tar.gz
+          ./artifacts/OpenCodeUpdater-win-x64/*.zip \
+          ./artifacts/OpenCodeUpdater-linux-x64/*.tar.gz \
