@@ -1,18 +1,24 @@
 # OpenCode Updater
 
-This is a .NET 9.0 console application that downloads and installs the latest OpenCode release from GitHub.
+This is a .NET 9.0 aot console application that downloads and installs the latest [OpenCode release from GitHub](https://github.com/sst/opencode). The app fetches recent changelogs, downloads the latest version with a progress bar, extracts the archive to a user-defined directory, and confirms the successful completion of the upgrade.
+
+![Preview of Output Program](sample-output.webp)
 
 ## Core Functionality
 
 - Checks the current installed OpenCode version (if available)
 - Fetches the latest release from the sst/opencode GitHub repository
 - Compares versions and skips download if already up to date
-- **Displays release notes** for all versions between current and latest when update is available
+- **Displays release notes** for all versions between the current and the latest when an update is available
 - Downloads the appropriate platform version (Windows, macOS, Linux)
-- Extracts it to the appropriate directory
+- Extract it to the appropriate directory
 - Cleans up temporary files
 
 ## Getting Started
+
+### Installation
+
+You can obtain it from the releases, or alternatively, you can build it yourself.
 
 ### Prerequisites
 
